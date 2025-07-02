@@ -1,18 +1,19 @@
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 )
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, ContextTypes,
     CallbackQueryHandler, MessageHandler, filters
 )
 
-API_TOKEN = "7939973394:AAHiqYYc5MSsiad1qslZ5rvgSnEEP7XeBfs"
-ADMIN_CHAT_ID = 7285220061
+import os
+
+API_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")  # Будем брать из переменных окружения
+ADMIN_CHAT_ID = int(os.getenv("ADMIN_CHAT_ID"))  # ID админа из переменных окружения
 REVIEWS_CHANNEL_LINK = "https://t.me/+Qca52HCOurI0MmRi"
 
 users_lang = {}
 
-# --- Тексты на двух языках ---
 TEXTS = {
     'start': {
         'ru': "Добро пожаловать в шиномонтаж!\n\nВыберите нужный раздел ниже 👇",
@@ -31,7 +32,6 @@ TEXTS = {
         'uk': "📍 Ми знаходимось тут:"
     }
 }
-
 
 def get_lang(user_id):
     return users_lang.get(user_id, 'ru')
@@ -86,18 +86,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     else:
-        # Запись клиента
         name = update.message.from_user.full_name
         msg = f"🆕 Новая запись!\n👤 {name}\n🕒 {text}\n🆔 {update.message.from_user.id}"
-        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=msg)
-        await update.message.reply_text("✅ Запись успешно отправлена! Мы с вами свяжемся.")
-        return
-
-
-if __name__ == '__main__':
-    app = ApplicationBuilder().token(API_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(set_language))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("🚀 Бот запущен...")
-    app.run_polling()
+        await context.bot.send_message(_
