@@ -1,321 +1,251 @@
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    ConversationHandler,
-    MessageHandler,
-    filters,
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 )
-import datetime
-import pytz
+from telegram.ext import (
+    Application, CommandHandler, CallbackQueryHandler, ConversationHandler,
+    MessageHandler, filters, ContextTypes
+)
+import logging
 
-# --- Настройки ---
-TOKEN = "7939973394:AAHiqYYc5MSsiad1qslZ5rvgSnEEP7XeBfs"
-ADMIN_CHAT_ID = 7285220061
-REVIEWS_CHANNEL_LINK = "https://t.me/+Qca52HCOurI0MmRi"
-ADMIN_USERNAME_FOR_REVIEWS = "shimontazh_arciz"
-TIMEZONE = pytz.timezone('Europe/Kiev')
-
+# Включим логирование
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-(
-    LANG_SELECTION,
-    BOOKING_SELECT_DAY,
-    BOOKING_SELECT_TIME,
-    BOOKING_ASK_NAME,
-    BOOKING_ASK_PHONE,
-    BOOKING_CONFIRM,
-) = range(6)
+# Состояния для ConversationHandler
+LANG, MAIN_MENU, BOOKING, MY_BOOKINGS, REVIEWS, FAQ = range(6)
 
-booked_slots = {}
+# Здесь твои данные для записи и отзывы (в реале нужно базу)
+user_bookings = {}
+reviews_channel_id = -1001234567890  # замени на свой ID канала для отзывов
+admin_chat_id = 123456789  # сюда будут приходить уведомления о новых записях
 
-translations = {
-    'ru': {
-        'choose_language': "Пожалуйста, выберите язык:",
-        'lang_button_ru': "Русский",
-        'lang_button_uk': "Українська",
-        'welcome_message': (
-            "Привет, {user_full_name}! 👋\n\n"
-            "Добро пожаловать в шиномонтаж!\n"
-            "Выберите действие ниже:"
-        ),
-        'btn_book_appointment': "🗓️ Записаться на шиномонтаж",
-        'btn_my_bookings': "📋 Мои записи",
-        'btn_info_and_faq': "ℹ️ Информация и FAQ",
-        'btn_our_location': "📍 Наше местоположение",
-        'btn_reviews': "⭐ Отзывы",
-        'btn_main_menu': "⬅️ Главное меню",
-        'select_day_for_booking': "Выберите день для записи:",
-        'select_time_for_booking': "Выберите время для записи на {date}:",
-        'enter_name': "Введите ваше имя:",
-        'enter_phone': "Введите номер телефона (например, +380XXXXXXXXX):",
-        'booking_confirmed': "✅ Запись подтверждена на {date} в {time}. Спасибо, {name}!",
-        'process_cancelled': "Процесс записи отменён.",
-        'cancel': "Отмена",
-        'back': "Назад",
-        'error_invalid_phone': "Неверный формат номера телефона. Попробуйте снова.",
-        'error_invalid_name': "Неверное имя. Попробуйте снова.",
-        'info_faq': (
-            "Информация и FAQ:\n"
-            "- Услуги: монтаж, балансировка, ремонт шин.\n"
-            "- Часы работы: Пн-Пт 8:00-17:00.\n"
-            "- Адрес: г. Одесса, ул. Успенская, 1."
-        ),
-        'our_location_address': "Мы находимся по адресу: г. Одесса, ул. Успенская, 1.",
-        'no_active_bookings': "У вас пока нет записей.",
-    },
-    'uk': {
-        'choose_language': "Будь ласка, оберіть мову:",
-        'lang_button_ru': "Російська",
-        'lang_button_uk': "Українська",
-        'welcome_message': (
-            "Привіт, {user_full_name}! 👋\n\n"
-            "Ласкаво просимо до шиномонтажу!\n"
-            "Оберіть дію нижче:"
-        ),
-        'btn_book_appointment': "🗓️ Записатися на шиномонтаж",
-        'btn_my_bookings': "📋 Мої записи",
-        'btn_info_and_faq': "ℹ️ Інформація та FAQ",
-        'btn_our_location': "📍 Наше місцезнаходження",
-        'btn_reviews': "⭐ Відгуки",
-        'btn_main_menu': "⬅️ Головне меню",
-        'select_day_for_booking': "Оберіть день для запису:",
-        'select_time_for_booking': "Оберіть час для запису на {date}:",
-        'enter_name': "Введіть ваше ім'я:",
-        'enter_phone': "Введіть номер телефону (наприклад, +380XXXXXXXXX):",
-        'booking_confirmed': "✅ Запис підтверджено на {date} о {time}. Дякуємо, {name}!",
-        'process_cancelled': "Процес запису скасовано.",
-        'cancel': "Скасувати",
-        'back': "Назад",
-        'error_invalid_phone': "Неправильний формат номера телефону. Спробуйте ще раз.",
-        'error_invalid_name': "Неправильне ім'я. Спробуйте ще раз.",
-        'info_faq': (
-            "Інформація та FAQ:\n"
-            "- Послуги: монтаж, балансування, ремонт шин.\n"
-            "- Години роботи: Пн-Пт 8:00-17:00.\n"
-            "- Адреса: м. Одеса, вул. Успенська, 1."
-        ),
-        'our_location_address': "Ми знаходимося за адресою: м. Одеса, вул. Успенська, 1.",
-        'no_active_bookings': "У вас поки що немає записів.",
-    }
-}
-
-def get_text(context: ContextTypes.DEFAULT_TYPE, key: str, **kwargs) -> str:
-    lang = context.user_data.get('language', 'ru')
-    text = translations.get(lang, translations['ru']).get(key, key)
-    return text.format(**kwargs)
-
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_lang = context.user_data.get('language')
-    if not user_lang:
-        keyboard = [
-            [InlineKeyboardButton(translations['ru']['lang_button_ru'], callback_data='lang_ru')],
-            [InlineKeyboardButton(translations['uk']['lang_button_uk'], callback_data='lang_uk')],
+# Кнопки меню
+def main_menu_keyboard(lang='ru'):
+    if lang == 'ru':
+        buttons = [
+            [InlineKeyboardButton("Записаться", callback_data='book')],
+            [InlineKeyboardButton("Мои записи", callback_data='my_bookings')],
+            [InlineKeyboardButton("Отзывы", callback_data='reviews')],
+            [InlineKeyboardButton("FAQ", callback_data='faq')],
+            [InlineKeyboardButton("Локация", callback_data='location')]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        if update.message:
-            await update.message.reply_text(translations['ru']['choose_language'], reply_markup=reply_markup)
-        elif update.callback_query:
-            await update.callback_query.edit_message_text(translations['ru']['choose_language'], reply_markup=reply_markup)
-        return LANG_SELECTION
-    else:
-        await show_main_menu(update, context)
-        return ConversationHandler.END
+    else:  # en
+        buttons = [
+            [InlineKeyboardButton("Book appointment", callback_data='book')],
+            [InlineKeyboardButton("My bookings", callback_data='my_bookings')],
+            [InlineKeyboardButton("Reviews", callback_data='reviews')],
+            [InlineKeyboardButton("FAQ", callback_data='faq')],
+            [InlineKeyboardButton("Location", callback_data='location')]
+        ]
+    return InlineKeyboardMarkup(buttons)
 
-async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    lang_code = query.data.split('_')[1]
-    context.user_data['language'] = lang_code
-    await show_main_menu(update, context)
-    return ConversationHandler.END
-
-async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    welcome = get_text(context, 'welcome_message', user_full_name=user.full_name)
+# Старт и выбор языка
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton(get_text(context, 'btn_book_appointment'), callback_data='book')],
-        [InlineKeyboardButton(get_text(context, 'btn_my_bookings'), callback_data='my_bookings')],
-        [InlineKeyboardButton(get_text(context, 'btn_info_and_faq'), callback_data='info')],
-        [InlineKeyboardButton(get_text(context, 'btn_our_location'), callback_data='location')],
-        [InlineKeyboardButton(get_text(context, 'btn_reviews'), url=REVIEWS_CHANNEL_LINK)],
+        [InlineKeyboardButton("Русский", callback_data='lang_ru')],
+        [InlineKeyboardButton("English", callback_data='lang_en')]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    if update.message:
-        await update.message.reply_text(welcome, reply_markup=reply_markup)
-    elif update.callback_query:
-        await update.callback_query.edit_message_text(welcome, reply_markup=reply_markup)
+    await update.message.reply_text(
+        "Выберите язык / Choose language:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return LANG
 
-async def booking_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def lang_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    keyboard = []
-    today = datetime.datetime.now(TIMEZONE).date()
-    for i in range(7):
-        day = today + datetime.timedelta(days=i)
-        keyboard.append([InlineKeyboardButton(day.strftime("%d.%m.%Y"), callback_data=f"day_{day.isoformat()}")])
-    keyboard.append([InlineKeyboardButton(get_text(context, 'btn_main_menu'), callback_data='main_menu')])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(get_text(context, 'select_day_for_booking'), reply_markup=reply_markup)
-    return BOOKING_SELECT_DAY
+    lang = query.data.split('_')[1]
+    context.user_data['lang'] = lang
+    text = "Язык выбран: Русский" if lang == 'ru' else "Language selected: English"
+    await query.edit_message_text(text=text)
+    # Показать главное меню
+    await query.message.reply_text(
+        text="Главное меню" if lang == 'ru' else "Main menu",
+        reply_markup=main_menu_keyboard(lang)
+    )
+    return MAIN_MENU
 
-async def select_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Обработка выбора в главном меню
+async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    day_str = query.data.split('_')[1]
-    context.user_data['booking_day'] = day_str
-    # Show time slots 8:00 - 17:00 every 30 min
-    keyboard = []
-    date_obj = datetime.date.fromisoformat(day_str)
-    now = datetime.datetime.now(TIMEZONE)
-    start = datetime.datetime.combine(date_obj, datetime.time(8,0,tzinfo=TIMEZONE))
-    end = datetime.datetime.combine(date_obj, datetime.time(17,0,tzinfo=TIMEZONE))
-    slot = start
-    while slot <= end:
-        time_str = slot.strftime("%H:%M")
-        # Check if booked
-        booked = booked_slots.get(day_str, {}).get(time_str)
-        if booked:
-            text = f"{time_str} (Занято)"
-        elif slot < now:
-            text = f"{time_str} (Минуло)"
+    lang = context.user_data.get('lang', 'ru')
+    data = query.data
+
+    if data == 'book':
+        # Пример: записываем на сегодня 10:00, 11:00 и 12:00
+        buttons = [
+            [InlineKeyboardButton("10:00", callback_data='book_time_10')],
+            [InlineKeyboardButton("11:00", callback_data='book_time_11')],
+            [InlineKeyboardButton("12:00", callback_data='book_time_12')],
+            [InlineKeyboardButton("Отмена" if lang == 'ru' else "Cancel", callback_data='cancel')]
+        ]
+        await query.edit_message_text(
+            "Выберите время для записи:" if lang == 'ru' else "Choose a time:",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+        return BOOKING
+
+    elif data == 'my_bookings':
+        user_id = query.from_user.id
+        bookings = user_bookings.get(user_id, [])
+        if bookings:
+            text = "\n".join(bookings) if lang == 'ru' else "\n".join(bookings)
         else:
-            text = time_str
-        keyboard.append([InlineKeyboardButton(text, callback_data=f"time_{time_str}")])
-        slot += datetime.timedelta(minutes=30)
-    keyboard.append([InlineKeyboardButton(get_text(context, 'btn_main_menu'), callback_data='main_menu')])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(get_text(context, 'select_time_for_booking', date=date_obj.strftime("%d.%m.%Y")), reply_markup=reply_markup)
-    return BOOKING_SELECT_TIME
+            text = "У вас пока нет записей." if lang == 'ru' else "You have no bookings yet."
+        await query.edit_message_text(text)
+        await query.message.reply_text(
+            "Главное меню" if lang == 'ru' else "Main menu",
+            reply_markup=main_menu_keyboard(lang)
+        )
+        return MAIN_MENU
 
-async def select_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    elif data == 'reviews':
+        text = "Пожалуйста, отправьте ваш отзыв." if lang == 'ru' else "Please send your review."
+        await query.edit_message_text(text)
+        return REVIEWS
+
+    elif data == 'faq':
+        faq_text = (
+            "Вопросы и ответы:\n"
+            "1. Как записаться? - Нажмите 'Записаться'.\n"
+            "2. Где находится шиномонтаж? - Мы находимся по адресу ...\n"
+            "3. Как отменить запись? - Напишите нам.\n"
+        ) if lang == 'ru' else (
+            "FAQ:\n"
+            "1. How to book? - Click 'Book appointment'.\n"
+            "2. Where is the tire service? - We are located at ...\n"
+            "3. How to cancel? - Contact us.\n"
+        )
+        await query.edit_message_text(faq_text)
+        await query.message.reply_text(
+            "Главное меню" if lang == 'ru' else "Main menu",
+            reply_markup=main_menu_keyboard(lang)
+        )
+        return MAIN_MENU
+
+    elif data == 'location':
+        # Можно отправить геолокацию (пример координат)
+        await query.edit_message_text(
+            "Наш адрес: г. Киев, ул. Примерная, 123" if lang == 'ru' else "Our address: Kyiv, Example St. 123"
+        )
+        await query.message.reply_location(latitude=50.4501, longitude=30.5234)
+        await query.message.reply_text(
+            "Главное меню" if lang == 'ru' else "Main menu",
+            reply_markup=main_menu_keyboard(lang)
+        )
+        return MAIN_MENU
+
+    elif data == 'cancel':
+        await query.edit_message_text("Отменено" if lang == 'ru' else "Canceled")
+        await query.message.reply_text(
+            "Главное меню" if lang == 'ru' else "Main menu",
+            reply_markup=main_menu_keyboard(lang)
+        )
+        return MAIN_MENU
+
+    else:
+        await query.answer("Неизвестная команда" if lang == 'ru' else "Unknown command", show_alert=True)
+        return MAIN_MENU
+
+# Обработка выбора времени записи
+async def booking_time_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    time_str = query.data.split('_')[1]
-    day_str = context.user_data.get('booking_day')
-    if not day_str:
-        await query.edit_message_text("Ошибка. Пожалуйста, начните заново /start")
-        return ConversationHandler.END
-    # Проверка доступности
-    if booked_slots.get(day_str, {}).get(time_str):
-        await query.answer("Этот слот уже занят", show_alert=True)
-        return BOOKING_SELECT_TIME
-    # Сохраняем время
-    context.user_data['booking_time'] = time_str
-    await query.edit_message_text(get_text(context, 'enter_name'))
-    return BOOKING_ASK_NAME
+    lang = context.user_data.get('lang', 'ru')
+    time = query.data.split('_')[-1]
 
-async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    if not text.isalpha() or len(text) < 2:
-        await update.message.reply_text(get_text(context, 'error_invalid_name'))
-        return BOOKING_ASK_NAME
-    context.user_data['booking_name'] = text
-    await update.message.reply_text(get_text(context, 'enter_phone'))
-    return BOOKING_ASK_PHONE
+    context.user_data['booking_time'] = time
+    text = "Введите ваше имя:" if lang == 'ru' else "Enter your name:"
+    await query.edit_message_text(text)
+    return BOOKING + 1  # новое состояние для имени
 
-async def ask_phone(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    if not text.startswith('+') or not text[1:].isdigit() or len(text) < 10:
-        await update.message.reply_text(get_text(context, 'error_invalid_phone'))
-        return BOOKING_ASK_PHONE
-    context.user_data['booking_phone'] = text
-    day = context.user_data['booking_day']
-    time = context.user_data['booking_time']
-    name = context.user_data['booking_name']
-    confirm_text = (
-        f"Проверьте данные:\nДата: {datetime.date.fromisoformat(day).strftime('%d.%m.%Y')}\n"
-        f"Время: {time}\nИмя: {name}\nТелефон: {text}\n\n"
-        "Все верно? (да/нет)"
+# Ввод имени
+async def booking_name_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = context.user_data.get('lang', 'ru')
+    name = update.message.text.strip()
+    context.user_data['booking_name'] = name
+
+    text = "Введите ваш телефон:" if lang == 'ru' else "Enter your phone number:"
+    await update.message.reply_text(text)
+    return BOOKING + 2  # новое состояние для телефона
+
+# Ввод телефона и подтверждение записи
+async def booking_phone_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = context.user_data.get('lang', 'ru')
+    phone = update.message.text.strip()
+    context.user_data['booking_phone'] = phone
+
+    time = context.user_data.get('booking_time', 'unknown')
+    name = context.user_data.get('booking_name', 'unknown')
+
+    booking_info = f"{name} | {phone} | Время: {time}" if lang == 'ru' else f"{name} | {phone} | Time: {time}"
+
+    user_id = update.message.from_user.id
+    user_bookings.setdefault(user_id, []).append(booking_info)
+
+    # Отправляем уведомление админу
+    await context.bot.send_message(chat_id=admin_chat_id, text=f"Новая запись:\n{booking_info}")
+
+    await update.message.reply_text(
+        "Ваша запись подтверждена!\nСпасибо." if lang == 'ru' else "Your booking is confirmed!\nThank you."
     )
-    await update.message.reply_text(confirm_text)
-    return BOOKING_CONFIRM
-
-async def confirm_booking(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip().lower()
-    if text not in ['да', 'yes', 'так', 'ага']:
-        await update.message.reply_text(get_text(context, 'process_cancelled'))
-        return ConversationHandler.END
-    day = context.user_data['booking_day']
-    time = context.user_data['booking_time']
-    name = context.user_data['booking_name']
-    phone = context.user_data['booking_phone']
-    # Сохраняем бронь
-    if day not in booked_slots:
-        booked_slots[day] = {}
-    booked_slots[day][time] = {
-        'name': name,
-        'phone': phone,
-        'user_id': update.effective_user.id,
-    }
-    # Отправка уведомления админу
-    msg_admin = (
-        f"Новая запись:\nКлиент: {name}\n"
-        f"Телефон: {phone}\nДата: {datetime.date.fromisoformat(day).strftime('%d.%m.%Y')}\n"
-        f"Время: {time}"
+    await update.message.reply_text(
+        "Главное меню" if lang == 'ru' else "Main menu",
+        reply_markup=main_menu_keyboard(lang)
     )
-    await context.bot.send_message(ADMIN_CHAT_ID, msg_admin)
-    await update.message.reply_text(get_text(context, 'booking_confirmed', date=datetime.date.fromisoformat(day).strftime('%d.%m.%Y'), time=time, name=name))
-    return ConversationHandler.END
+    return MAIN_MENU
 
+# Обработка отзывов
+async def reviews_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = context.user_data.get('lang', 'ru')
+    text = update.message.text.strip()
+    user = update.message.from_user
+
+    # Отправляем отзыв в канал
+    await context.bot.send_message(
+        chat_id=reviews_channel_id,
+        text=f"Отзыв от @{user.username or user.full_name}:\n{text}"
+    )
+    await update.message.reply_text(
+        "Спасибо за ваш отзыв!" if lang == 'ru' else "Thank you for your review!"
+    )
+    await update.message.reply_text(
+        "Главное меню" if lang == 'ru' else "Main menu",
+        reply_markup=main_menu_keyboard(lang)
+    )
+    return MAIN_MENU
+
+# Команда /cancel для выхода из диалога
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(get_text(context, 'process_cancelled'))
-    return ConversationHandler.END
-
-async def info_and_faq(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(get_text(context, 'info_faq'))
-
-async def location(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(get_text(context, 'our_location_address'))
-
-async def my_bookings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    user_id = update.effective_user.id
-    user_bookings = []
-    for day, times in booked_slots.items():
-        for time, info in times.items():
-            if info.get('user_id') == user_id:
-                user_bookings.append(f"{day} в {time}")
-    if not user_bookings:
-        text = get_text(context, 'no_active_bookings')
-    else:
-        text = "Ваши записи:\n" + "\n".join(user_bookings)
-    await update.callback_query.edit_message_text(text)
+    lang = context.user_data.get('lang', 'ru')
+    await update.message.reply_text(
+        "Отменено." if lang == 'ru' else "Canceled.",
+        reply_markup=main_menu_keyboard(lang)
+    )
+    return MAIN_MENU
 
 def main():
+    TOKEN = "ТВОЙ_ТОКЕН_ЗДЕСЬ"
+
     app = Application.builder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(set_language, pattern='^lang_')],
+        entry_points=[CommandHandler('start', start)],
         states={
-            LANG_SELECTION: [CallbackQueryHandler(set_language, pattern='^lang_')],
-            BOOKING_SELECT_DAY: [CallbackQueryHandler(select_day, pattern='^day_')],
-            BOOKING_SELECT_TIME: [CallbackQueryHandler(select_time, pattern='^time_')],
-            BOOKING_ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_name)],
-            BOOKING_ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_phone)],
-            BOOKING_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_booking)],
+            LANG: [CallbackQueryHandler(lang_chosen, pattern='^lang_')],
+            MAIN_MENU: [CallbackQueryHandler(main_menu_handler, pattern='^(book|my_bookings|reviews|faq|location|cancel)$')],
+            BOOKING: [CallbackQueryHandler(booking_time_handler, pattern='^book_time_')],
+            BOOKING + 1: [MessageHandler(filters.TEXT & ~filters.COMMAND, booking_name_handler)],
+            BOOKING + 2: [MessageHandler(filters.TEXT & ~filters.COMMAND, booking_phone_handler)],
+            REVIEWS: [MessageHandler(filters.TEXT & ~filters.COMMAND, reviews_handler)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[CommandHandler('cancel', cancel)]
     )
 
-    app.add_handler(CommandHandler('start', start))  # <- отдельный обработчик /start
     app.add_handler(conv_handler)
-
-    # Меню вне конверсейшена
-    app.add_handler(CallbackQueryHandler(booking_start, pattern='^book$'))
-    app.add_handler(CallbackQueryHandler(my_bookings, pattern='^my_bookings$'))
-    app.add_handler(CallbackQueryHandler(info_and_faq, pattern='^info$'))
-    app.add_handler(CallbackQueryHandler(location, pattern='^location$'))
-    app.add_handler(CommandHandler('cancel', cancel))
 
     app.run_polling()
 
