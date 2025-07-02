@@ -295,7 +295,7 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start), CallbackQueryHandler(set_language, pattern='^lang_')],
+        entry_points=[CallbackQueryHandler(set_language, pattern='^lang_')],
         states={
             LANG_SELECTION: [CallbackQueryHandler(set_language, pattern='^lang_')],
             BOOKING_SELECT_DAY: [CallbackQueryHandler(select_day, pattern='^day_')],
@@ -304,9 +304,10 @@ def main():
             BOOKING_ASK_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_phone)],
             BOOKING_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_booking)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[CommandHandler('cancel', cancel)],
     )
 
+    app.add_handler(CommandHandler('start', start))  # <- отдельный обработчик /start
     app.add_handler(conv_handler)
 
     # Меню вне конверсейшена
